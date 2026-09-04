@@ -63,6 +63,8 @@ These guidelines supplement the default review criteria and may add repo-specifi
 
 **Commit:** 6a536dc
 
+**Reviewed content:** commit 6a536dc11bfd7faa6023b4996079af092c714323 — 1 file included, 0 excluded by review path filters
+
 <commit-message context-only="true">
 **Subject:** add greeting
 **Author:** Test User

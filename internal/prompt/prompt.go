@@ -603,6 +603,10 @@ func (b *Builder) BuildDirtyWithFiles(diff string, changedFiles []string, contex
 		Optional: ctx.optional,
 		Current: dirtyChangesSectionView{
 			Description: "The following changes have not yet been committed.",
+			Scope: ReviewScopeContext{
+				Target: "uncommitted working-tree changes",
+				Files:  git.DirtyReviewFileScope(diff, changedFiles),
+			},
 		},
 		Diff: diffSectionView{
 			Heading: "### Diff",
@@ -1166,11 +1170,17 @@ func (b *Builder) buildSinglePrompt(sha string, contextCount int, agentName, rev
 	}
 	ctx.optional.KataContext = kataView
 
+	excludes := b.resolveExcludes(reviewType)
+	scope, _ := git.CommitReviewFileScopeCtx(b.context(), b.repoPath, sha, excludes...)
 	currentView := currentCommitSectionView{
 		Commit:  shortSHA,
 		Subject: escapeXML(info.Subject),
 		Author:  escapeXML(info.Author),
 		Message: escapeXML(info.Body),
+		Scope: ReviewScopeContext{
+			Target: "commit " + sha,
+			Files:  scope,
+		},
 	}
 	currentRequired, err := renderCurrentCommitRequired(currentView)
 	if err != nil {
@@ -1189,7 +1199,6 @@ func (b *Builder) buildSinglePrompt(sha string, contextCount int, agentName, rev
 		return "", err
 	}
 
-	excludes := b.resolveExcludes(reviewType)
 	bodyLimit := max(0, ctx.promptCap-len(ctx.requiredPrefix))
 	diffLimit := max(0, bodyLimit-len(currentRequired)-len(currentOverflow)-len(emptyDiffBlock))
 	diff, truncated, err := git.GetDiffLimitedCtx(b.context(), b.repoPath, sha, diffLimit, excludes...)
@@ -1308,7 +1317,16 @@ func (b *Builder) buildRangePrompt(rangeRef string, contextCount int, agentName,
 		return "", err
 	}
 	ctx.optional.KataContext = kataView
-	currentView := commitRangeSectionView{Count: len(commits), Entries: entries}
+	excludes := b.resolveExcludes(reviewType)
+	scope, _ := git.RangeReviewFileScopeCtx(b.context(), b.repoPath, rangeRef, excludes...)
+	currentView := commitRangeSectionView{
+		Count:   len(commits),
+		Entries: entries,
+		Scope: ReviewScopeContext{
+			Target: "range " + stripInlineCodeBreakers(rangeRef),
+			Files:  scope,
+		},
+	}
 	currentRequiredText, err := renderCommitRangeRequired(currentView)
 	if err != nil {
 		return "", err
@@ -1326,7 +1344,6 @@ func (b *Builder) buildRangePrompt(rangeRef string, contextCount int, agentName,
 		return "", err
 	}
 
-	excludes := b.resolveExcludes(reviewType)
 	bodyLimit := max(0, ctx.promptCap-len(ctx.requiredPrefix))
 	diffLimit := max(0, bodyLimit-len(currentRequiredText)-len(currentOverflowText)-len(emptyDiffBlock))
 	diff, truncated, err := git.GetRangeDiffLimitedCtx(b.context(), b.repoPath, rangeRef, diffLimit, excludes...)
@@ -1363,7 +1380,11 @@ func (b *Builder) buildRangePrompt(rangeRef string, contextCount int, agentName,
 					for _, entry := range selectedCtx.Review.Subject.Range.Entries {
 						entries = append(entries, commitRangeEntryView(entry))
 					}
-					currentView = commitRangeSectionView{Count: selectedCtx.Review.Subject.Range.Count, Entries: entries}
+					currentView = commitRangeSectionView{
+						Count:   selectedCtx.Review.Subject.Range.Count,
+						Entries: entries,
+						Scope:   selectedCtx.Review.Subject.Range.Scope,
+					}
 				}
 				diffView = diffSectionView{Heading: selectedCtx.Review.Diff.Heading, Body: selectedCtx.Review.Diff.Body, Fallback: selectedCtx.Review.Fallback.Rendered()}
 			}

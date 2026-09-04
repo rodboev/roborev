@@ -1,6 +1,11 @@
 package prompt
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+
+	"go.kenn.io/roborev/internal/git"
+)
 
 type TemplateContext struct {
 	Meta    PromptMeta
@@ -213,11 +218,13 @@ type SingleSubjectContext struct {
 	Subject string
 	Author  string
 	Message string
+	Scope   ReviewScopeContext
 }
 
 type RangeSubjectContext struct {
 	Count   int
 	Entries []RangeEntryContext
+	Scope   ReviewScopeContext
 }
 
 type RangeEntryContext struct {
@@ -227,6 +234,33 @@ type RangeEntryContext struct {
 
 type DirtySubjectContext struct {
 	Description string
+	Scope       ReviewScopeContext
+}
+
+type ReviewScopeContext struct {
+	Target string
+	Files  git.ReviewFileScope
+}
+
+// FileSummary renders the count clause, or says the counts are unavailable.
+func (s ReviewScopeContext) FileSummary() string {
+	switch {
+	case s.Files.IncludedKnown && s.Files.FilteredKnown:
+		return fmt.Sprintf("%d %s included, %d excluded by review path filters", s.Files.Included, pluralizeFile(s.Files.Included), s.Files.Filtered)
+	case s.Files.IncludedKnown:
+		return fmt.Sprintf("%d %s included, excluded count unavailable", s.Files.Included, pluralizeFile(s.Files.Included))
+	case s.Files.FilteredKnown:
+		return fmt.Sprintf("included count unavailable, %d excluded by review path filters", s.Files.Filtered)
+	default:
+		return "file counts unavailable"
+	}
+}
+
+func pluralizeFile(count int) string {
+	if count == 1 {
+		return "file"
+	}
+	return "files"
 }
 
 type DiffContext struct {

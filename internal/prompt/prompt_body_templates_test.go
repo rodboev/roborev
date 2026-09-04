@@ -25,6 +25,9 @@ func TestRenderSinglePromptBodyUsesNestedSections(t *testing.T) {
 			Commit:  "abc1234",
 			Subject: "template prompt rendering",
 			Author:  "Test User",
+			Scope: ReviewScopeContext{
+				Target: "commit abc1234567890",
+			},
 		},
 		Diff: diffSectionView{
 			Heading: "### Diff",
@@ -38,6 +41,7 @@ func TestRenderSinglePromptBodyUsesNestedSections(t *testing.T) {
 	assert.Contains(t, body, "## Project Guidelines")
 	assert.Contains(t, body, "## Pull Request Discussion")
 	assert.Contains(t, body, "## Current Commit")
+	assert.Contains(t, body, "**Reviewed content:** commit abc1234567890 — file counts unavailable")
 	assert.Contains(t, body, "**Subject:** template prompt rendering")
 	assert.Contains(t, body, "### Diff")
 }
@@ -49,6 +53,7 @@ func TestRenderRangePromptUsesNestedSections(t *testing.T) {
 		},
 		Current: commitRangeSectionView{
 			Entries: []commitRangeEntryView{{Commit: "abc1234", Subject: "first"}, {Commit: "def5678", Subject: "second"}},
+			Scope:   ReviewScopeContext{Target: "range main..feature"},
 		},
 		Diff: diffSectionView{
 			Heading: "### Combined Diff",
@@ -61,6 +66,7 @@ func TestRenderRangePromptUsesNestedSections(t *testing.T) {
 
 	assert.Contains(t, body, "## Pull Request Discussion")
 	assert.Contains(t, body, "## Commit Range")
+	assert.Contains(t, body, "**Reviewed content:** range main..feature — file counts unavailable")
 	assert.Contains(t, body, "- abc1234 first")
 	assert.Contains(t, body, "- def5678 second")
 	assert.Contains(t, body, "### Combined Diff")
@@ -98,6 +104,7 @@ func TestRenderDirtyPromptUsesNestedSections(t *testing.T) {
 		},
 		Current: dirtyChangesSectionView{
 			Description: "The following changes have not yet been committed.",
+			Scope:       ReviewScopeContext{Target: "uncommitted working-tree changes"},
 		},
 		Diff: diffSectionView{
 			Heading: "### Diff",
@@ -110,6 +117,7 @@ func TestRenderDirtyPromptUsesNestedSections(t *testing.T) {
 
 	assert.Contains(t, body, "## Pull Request Discussion")
 	assert.Contains(t, body, "## Uncommitted Changes")
+	assert.Contains(t, body, "**Reviewed content:** uncommitted working-tree changes — file counts unavailable")
 	assert.Contains(t, body, "The following changes have not yet been committed.")
 	assert.Contains(t, body, "### Diff")
 }

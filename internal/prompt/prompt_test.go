@@ -54,6 +54,55 @@ func TestBuildPromptWithoutContext(t *testing.T) {
 	assertNotContains(t, prompt, "## Previous Reviews", "Prompt should not contain previous reviews section without db")
 }
 
+func TestReviewedContentAccounting_Single(t *testing.T) {
+	r := newTestRepo(t)
+	sha := r.fastCommitFiles(map[string]string{"app.go": "package app\n"}, "add app")
+
+	prompt, err := NewBuilder(nil).ForRepo(r.dir, 0).Build(sha, 0, "test", "", "")
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "**Reviewed content:** commit "+sha+" — 1 file included, 0 excluded by review path filters")
+}
+
+func TestReviewedContentAccounting_Range(t *testing.T) {
+	r := newTestRepo(t)
+	baseSHA := r.fastCommitFiles(map[string]string{"base.go": "package app\n"}, "base")
+	headSHA := r.fastCommitFiles(map[string]string{"app.go": "package app\n"}, "add app")
+	rangeRef := baseSHA + ".." + headSHA
+
+	prompt, err := NewBuilder(nil).ForRepo(r.dir, 0).Build(rangeRef, 0, "test", "", "")
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "**Reviewed content:** range "+rangeRef+" — 1 file included, 0 excluded by review path filters")
+}
+
+func TestReviewedContentAccounting_Dirty(t *testing.T) {
+	diff := "diff --git a/app.go b/app.go\n" +
+		"--- a/app.go\n" +
+		"+++ b/app.go\n" +
+		"@@ -1 +1 @@\n" +
+		"-old\n" +
+		"+new\n"
+
+	prompt, err := NewBuilder(nil).BuildDirtyWithFiles(diff, []string{"app.go", "go.sum"}, 0, "test", "", "")
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "**Reviewed content:** uncommitted working-tree changes — 1 file included, 1 excluded by review path filters")
+}
+
+func TestReviewedContentAccounting_ExcludedLockfileCounted(t *testing.T) {
+	r := newTestRepo(t)
+	sha := r.fastCommitFiles(map[string]string{
+		"app.go": "package app\n",
+		"go.sum": "example.com/mod v1.0.0 h1:test\n",
+	}, "add app")
+
+	prompt, err := NewBuilder(nil).ForRepo(r.dir, 0).Build(sha, 0, "test", "", "")
+	require.NoError(t, err)
+
+	assert.Contains(t, prompt, "**Reviewed content:** commit "+sha+" — 1 file included, 1 excluded by review path filters")
+}
+
 func TestBuildPromptWithAdditionalContext(t *testing.T) {
 	repoPath, commits := setupTestRepo(t)
 
@@ -696,9 +745,12 @@ func singleCommitPromptPrefixLen(t *testing.T, repoPath, sha string) int {
 	require.NoError(t, err, "GetCommitInfo failed: %v", err)
 
 	sb.WriteString("## Current Commit\n\n")
-	fmt.Fprintf(&sb, "**Commit:** %s\n", gitpkg.ShortSHA(sha))
-	fmt.Fprintf(&sb, "**Author:** %s\n", info.Author)
+	fmt.Fprintf(&sb, "**Commit:** %s\n\n", gitpkg.ShortSHA(sha))
+	scope, err := gitpkg.CommitReviewFileScopeCtx(t.Context(), repoPath, sha)
+	require.NoError(t, err)
+	fmt.Fprintf(&sb, "**Reviewed content:** commit %s — %s\n\n", sha, (ReviewScopeContext{Files: scope}).FileSummary())
 	fmt.Fprintf(&sb, "**Subject:** %s\n", info.Subject)
+	fmt.Fprintf(&sb, "**Author:** %s\n", info.Author)
 	if info.Body != "" {
 		fmt.Fprintf(&sb, "\n**Message:**\n%s\n", info.Body)
 	}
@@ -722,6 +774,9 @@ func rangePromptPrefixLen(t *testing.T, repoPath, rangeRef string) int {
 	require.NoError(t, err, "GetRangeCommits failed: %v", err)
 
 	sb.WriteString("## Commit Range\n\n")
+	scope, err := gitpkg.RangeReviewFileScopeCtx(t.Context(), repoPath, rangeRef)
+	require.NoError(t, err)
+	fmt.Fprintf(&sb, "**Reviewed content:** range %s — %s\n\n", stripInlineCodeBreakers(rangeRef), (ReviewScopeContext{Files: scope}).FileSummary())
 	fmt.Fprintf(&sb, "Reviewing %d commits:\n\n", len(commits))
 	for _, sha := range commits {
 		info, err := gitpkg.GetCommitInfo(repoPath, sha)
@@ -1047,6 +1102,16 @@ func TestBuildRangePromptNonCodexSmallCapStaysWithinCap(t *testing.T) {
 		"expected diff-omitted marker")
 }
 
+func reviewedDirtyChangesView(diff string) dirtyChangesSectionView {
+	return dirtyChangesSectionView{
+		Description: "The following changes have not yet been committed.",
+		Scope: ReviewScopeContext{
+			Target: "uncommitted working-tree changes",
+			Files:  gitpkg.DirtyReviewFileScope(diff, nil),
+		},
+	}
+}
+
 func TestBuildDirtySmallCapStaysWithinCap(t *testing.T) {
 	repoPath, _ := setupLargeDiffRepoWithGuidelines(t, 5000)
 	diff := strings.Repeat("+ line\n", 50000)
@@ -1078,9 +1143,10 @@ func TestBuildDirtySmallCapStaysWithinCap(t *testing.T) {
 	}
 	diffSection.WriteString("```\n")
 
+	currentSection, err := renderDirtyChangesSection(reviewedDirtyChangesView(diff))
+	require.NoError(t, err)
 	cap = len(GetSystemPrompt("claude-code", "dirty")+"\n") +
-		len("## Uncommitted Changes\n\nThe following changes have not yet been committed.\n\n") +
-		diffSection.Len() + 32
+		len(currentSection) + diffSection.Len() + 32
 	b = NewBuilderWithConfig(nil, &config.Config{DefaultMaxPromptSize: cap})
 
 	prompt, err = b.ForRepo(repoPath, 0).BuildDirty(diff, 0, "claude-code", "", "")
@@ -1427,9 +1493,7 @@ func TestBuildDirtyTruncatedFallbackPreservesClosingFenceAtTightCap(t *testing.T
 	repoPath := t.TempDir()
 	diff := strings.Repeat("+ keep this line in the truncated fallback\n", 128)
 
-	currentSection, err := renderDirtyChangesSection(dirtyChangesSectionView{
-		Description: "The following changes have not yet been committed.",
-	})
+	currentSection, err := renderDirtyChangesSection(reviewedDirtyChangesView(diff))
 	require.NoError(t, err)
 	fallbackOnly, err := renderDirtyTruncatedDiffFallback("")
 	require.NoError(t, err)
@@ -1456,9 +1520,7 @@ func TestBuildDirtyTruncatedFallbackTrimsOptionalContextBeforeShrinkingSnippet(t
 	require.NoError(t, os.WriteFile(filepath.Join(repoPath, ".roborev.toml"), []byte(toml), 0o644))
 
 	diff := strings.Repeat("+ retained after optional trim\n", 128)
-	currentSection, err := renderDirtyChangesSection(dirtyChangesSectionView{
-		Description: "The following changes have not yet been committed.",
-	})
+	currentSection, err := renderDirtyChangesSection(reviewedDirtyChangesView(diff))
 	require.NoError(t, err)
 	fallbackOnly, err := renderDirtyTruncatedDiffFallback("")
 	require.NoError(t, err)
@@ -1494,7 +1556,7 @@ func TestBuildDirtyTruncatedFallbackContinuesTrimmingOptionalContextForSnippet(t
 	snippetFallback, err := renderDirtyTruncatedDiffFallback(snippetBody)
 	require.NoError(t, err)
 	requiredView := dirtyPromptView{
-		Current: dirtyChangesSectionView{Description: "The following changes have not yet been committed."},
+		Current: reviewedDirtyChangesView(diff),
 		Diff:    diffSectionView{Heading: "### Diff", Fallback: snippetFallback},
 	}
 	guidelinesView := requiredView
@@ -1504,7 +1566,7 @@ func TestBuildDirtyTruncatedFallbackContinuesTrimmingOptionalContextForSnippet(t
 			ProjectGuidelines: buildProjectGuidelinesSectionView(guidelines),
 			AdditionalContext: buildAdditionalContextSection(additionalContext),
 		},
-		Current: dirtyChangesSectionView{Description: "The following changes have not yet been committed."},
+		Current: reviewedDirtyChangesView(diff),
 		Diff:    diffSectionView{Heading: "### Diff", Fallback: fallbackOnly},
 	}
 	guidelinesEmptyView := fullOptionalEmptyView
@@ -1556,11 +1618,11 @@ func TestBuildDirtyFallbackOnlyRestoresOptionalContextWhenSnippetCannotFit(t *te
 	require.NoError(t, err)
 	guidelinesFallbackView := dirtyPromptView{
 		Optional: optionalSectionsView{ProjectGuidelines: buildProjectGuidelinesSectionView(guidelines)},
-		Current:  dirtyChangesSectionView{Description: "The following changes have not yet been committed."},
+		Current:  reviewedDirtyChangesView(diff),
 		Diff:     diffSectionView{Heading: "### Diff", Fallback: fallbackOnly},
 	}
 	requiredSingleLineView := dirtyPromptView{
-		Current: dirtyChangesSectionView{Description: "The following changes have not yet been committed."},
+		Current: reviewedDirtyChangesView(diff),
 		Diff:    diffSectionView{Heading: "### Diff", Fallback: singleLineFallback},
 	}
 	guidelinesFallbackBody, err := renderDirtyPrompt(guidelinesFallbackView)

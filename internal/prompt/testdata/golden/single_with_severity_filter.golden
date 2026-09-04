@@ -58,6 +58,8 @@ Severity filter: Only include Medium, High, and Critical findings. Ignore any fi
 
 **Commit:** fde21d1
 
+**Reviewed content:** commit fde21d10ba57128a7b955a150cfa26c69ddd8db6 — 1 file included, 0 excluded by review path filters
+
 <commit-message context-only="true">
 **Subject:** add greeting
 **Author:** Test User

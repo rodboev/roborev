@@ -191,6 +191,7 @@ func templateContextFromSingleView(view singlePromptView) TemplateContext {
 				Subject: view.Current.Subject,
 				Author:  view.Current.Author,
 				Message: view.Current.Message,
+				Scope:   view.Current.Scope,
 			}},
 			Diff:     DiffContext{Heading: view.Diff.Heading, Body: view.Diff.Body},
 			Fallback: fallbackContextFromDiffSection(view.Diff),
@@ -207,7 +208,11 @@ func templateContextFromRangeView(view rangePromptView) TemplateContext {
 		Review: &ReviewTemplateContext{
 			Kind:     ReviewKindRange,
 			Optional: reviewOptionalContextFromView(view.Optional),
-			Subject:  SubjectContext{Range: &RangeSubjectContext{Count: view.Current.Count, Entries: entries}},
+			Subject: SubjectContext{Range: &RangeSubjectContext{
+				Count:   view.Current.Count,
+				Entries: entries,
+				Scope:   view.Current.Scope,
+			}},
 			Diff:     DiffContext{Heading: view.Diff.Heading, Body: view.Diff.Body},
 			Fallback: fallbackContextFromDiffSection(view.Diff),
 		},
@@ -225,7 +230,10 @@ func templateContextFromDirtyView(view dirtyPromptView) TemplateContext {
 		Review: &ReviewTemplateContext{
 			Kind:     ReviewKindDirty,
 			Optional: reviewOptionalContextFromView(view.Optional),
-			Subject:  SubjectContext{Dirty: &DirtySubjectContext{Description: view.Current.Description}},
+			Subject: SubjectContext{Dirty: &DirtySubjectContext{
+				Description: view.Current.Description,
+				Scope:       view.Current.Scope,
+			}},
 			Diff:     DiffContext{Heading: view.Diff.Heading, Body: view.Diff.Body},
 			Fallback: fallback,
 		},

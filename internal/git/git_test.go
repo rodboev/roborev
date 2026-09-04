@@ -48,6 +48,94 @@ func runGitHookPWDHelper() int {
 	return 0
 }
 
+func TestCommitReviewFileScope(t *testing.T) {
+	repo := NewTestRepoWithCommit(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo.Dir, "app.go"), []byte("package app\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo.Dir, "go.sum"), []byte("example.com/mod v1.0.0 h1:test\n"), 0o644))
+	repo.CommitAll("add app")
+	sha := repo.Run("rev-parse", "HEAD")
+
+	scope, err := CommitReviewFileScopeCtx(t.Context(), repo.Dir, sha)
+	require.NoError(t, err)
+
+	assert.Equal(t, ReviewFileScope{Included: 1, Filtered: 1, IncludedKnown: true, FilteredKnown: true}, scope)
+}
+
+func TestCommitReviewFileScope_RootCommit(t *testing.T) {
+	repo := NewTestRepo(t)
+	repo.CommitFile("root.txt", "root\n", "root")
+	rootSHA := repo.Run("rev-parse", "HEAD")
+	showPaths := strings.Fields(repo.Run("show", "--format=", "--name-only", rootSHA))
+	diffTreePaths := strings.Fields(repo.Run("diff-tree", "--no-commit-id", "--name-only", "-r", rootSHA))
+
+	scope, err := CommitReviewFileScopeCtx(t.Context(), repo.Dir, rootSHA)
+	require.NoError(t, err)
+
+	assert := assert.New(t)
+	assert.Empty(diffTreePaths)
+	assert.Len(showPaths, 1)
+	assert.Equal(len(showPaths), scope.Included)
+	assert.True(scope.IncludedKnown)
+	assert.True(scope.FilteredKnown)
+	t.Logf("diff-tree paths=%d; git show paths=%d; review scope included=%d", len(diffTreePaths), len(showPaths), scope.Included)
+}
+
+func TestRangeReviewFileScope(t *testing.T) {
+	repo := NewTestRepoWithCommit(t)
+	baseSHA := repo.Run("rev-parse", "HEAD")
+	repo.CommitFile("app.go", "package app\n", "add app")
+	repo.CommitFile("go.sum", "example.com/mod v1.0.0 h1:test\n", "add checksum")
+
+	scope, err := RangeReviewFileScopeCtx(t.Context(), repo.Dir, baseSHA+"..HEAD")
+	require.NoError(t, err)
+
+	assert.Equal(t, ReviewFileScope{Included: 1, Filtered: 1, IncludedKnown: true, FilteredKnown: true}, scope)
+}
+
+func TestReviewFileScopeFrom(t *testing.T) {
+	t.Run("splits by membership", func(t *testing.T) {
+		scope := ReviewFileScopeFrom(
+			[]string{"app.go", "go.sum"},
+			[]string{"app.go"},
+		)
+		assert.Equal(t, ReviewFileScope{Included: 1, Filtered: 1, IncludedKnown: true, FilteredKnown: true}, scope)
+	})
+
+	t.Run("rename paths remain included", func(t *testing.T) {
+		scope := ReviewFileScopeFrom(
+			[]string{"old.go", "new.go"},
+			[]string{"old.go", "new.go"},
+		)
+		assert.Equal(t, ReviewFileScope{Included: 2, IncludedKnown: true, FilteredKnown: true}, scope)
+	})
+}
+
+func TestDirtyReviewFileScope(t *testing.T) {
+	diff := "diff --git a/old.go b/new.go\n" +
+		"similarity index 100%\n" +
+		"rename from old.go\n" +
+		"rename to new.go\n"
+
+	t.Run("rename", func(t *testing.T) {
+		scope := DirtyReviewFileScope(diff, []string{"old.go", "new.go"})
+		assert.Equal(t, ReviewFileScope{Included: 2, IncludedKnown: true, FilteredKnown: true}, scope)
+	})
+
+	t.Run("nil changed files", func(t *testing.T) {
+		scope := DirtyReviewFileScope(diff, nil)
+		assert.Equal(t, ReviewFileScope{Included: 2, IncludedKnown: true}, scope)
+	})
+}
+
+func TestDiffPaths(t *testing.T) {
+	diff := "diff --git a/plain.go b/plain.go\n" +
+		"+diff --git a/content.go b/content.go\n" +
+		" diff --git a/context.go b/context.go\n" +
+		"diff --git \"a/old name.go\" \"b/new name.go\"\n"
+
+	assert.Equal(t, []string{"new name.go", "old name.go", "plain.go"}, DiffPaths(diff))
+}
+
 func cleanHookPWDPath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		path = resolved

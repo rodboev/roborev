@@ -57,11 +57,14 @@ responses from developers. Use this context to:
 {{template "review_comments" .Comments}}
 {{- end}}{{end}}{{end}}
 {{define "optional_sections"}}{{template "kata_context" .}}{{template "project_guidelines" .}}{{template "additional_context" .}}{{template "dependency_metadata" .}}{{template "previous_reviews" .}}{{template "in_range_reviews" .}}{{template "previous_review_attempts" .}}{{end}}
+{{define "reviewed_content"}}**Reviewed content:** {{.Target}} — {{.FileSummary}}
+
+{{end}}
 {{define "current_commit_required"}}## Current Commit
 
 **Commit:** {{.Commit}}
 
-{{end}}
+{{template "reviewed_content" .Scope}}{{end}}
 {{define "current_commit_overflow"}}{{if or .Subject .Author .Message}}<commit-message context-only="true">
 {{if .Subject}}**Subject:** {{.Subject}}
 {{end}}{{if .Author}}**Author:** {{.Author}}
@@ -73,7 +76,7 @@ responses from developers. Use this context to:
 {{define "current_commit"}}{{template "current_commit_required" .}}{{template "current_commit_overflow" .}}{{end}}
 {{define "commit_range_required"}}## Commit Range
 
-Reviewing {{if gt .Count 0}}{{.Count}}{{else}}{{len .Entries}}{{end}} commits:
+{{template "reviewed_content" .Scope}}Reviewing {{if gt .Count 0}}{{.Count}}{{else}}{{len .Entries}}{{end}} commits:
 
 {{end}}
 {{define "commit_range_overflow"}}{{if .Entries}}<commit-messages context-only="true">
@@ -84,7 +87,7 @@ Reviewing {{if gt .Count 0}}{{.Count}}{{else}}{{len .Entries}}{{end}} commits:
 {{define "commit_range"}}{{template "commit_range_required" .}}{{template "commit_range_overflow" .}}{{end}}
 {{define "dirty_changes"}}## Uncommitted Changes
 
-{{if .Description}}{{.Description}}{{else}}The following changes have not yet been committed.{{end}}
+{{template "reviewed_content" .Scope}}{{if .Description}}{{.Description}}{{else}}The following changes have not yet been committed.{{end}}
 
 {{end}}
 {{define "diff_block"}}{{if .Diff.Heading}}{{.Diff.Heading}}{{else}}### Diff{{end}}

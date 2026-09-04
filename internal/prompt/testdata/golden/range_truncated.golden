@@ -54,12 +54,9 @@ Current date: GOLDEN_DATE (UTC)
 
 ## Commit Range
 
-Reviewing 2 commits:
+**Reviewed content:** range 391147df1a46b4705d6be3c61c54486f05f1c22e..1f1d7cf82f79ee1200733b19d2fd08609828a296 — 2 files included, 0 excluded by review path filters
 
-<commit-messages context-only="true">
-- ed651f1 first large addition
-- 1f1d7cf second large addition
-</commit-messages>
+Reviewing 2 commits:
 
 ### Combined Diff
 

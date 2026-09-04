@@ -848,6 +848,162 @@ func GetDiffCtx(
 	return string(out), nil
 }
 
+// ReviewFileScope reports how many changed paths a review's diff covers and how
+// many the review path filters removed. The Known flags are separate because the
+// dirty path sources the two numbers independently.
+type ReviewFileScope struct {
+	Included      int
+	Filtered      int
+	IncludedKnown bool
+	FilteredKnown bool
+}
+
+// ReviewFileScopeFrom pairs an unfiltered changed-path list with the post-filter
+// list for the same subject, comparing by path membership so a rename reported as
+// two paths on one side and one on the other still splits correctly.
+func ReviewFileScopeFrom(all, included []string) ReviewFileScope {
+	includedPaths := make(map[string]struct{}, len(included))
+	for _, path := range included {
+		includedPaths[path] = struct{}{}
+	}
+
+	allPaths := make(map[string]struct{}, len(all))
+	for _, path := range all {
+		allPaths[path] = struct{}{}
+	}
+
+	scope := ReviewFileScope{IncludedKnown: true, FilteredKnown: true}
+	for path := range allPaths {
+		if _, ok := includedPaths[path]; ok {
+			scope.Included++
+			continue
+		}
+		scope.Filtered++
+	}
+	return scope
+}
+
+// CommitReviewFileScopeCtx enumerates the paths GetDiffCtx emits for sha, with and
+// without the review path filters, using the name-only mirror of the same git show.
+func CommitReviewFileScopeCtx(
+	ctx context.Context, repoPath, sha string, extraExcludes ...string,
+) (ReviewFileScope, error) {
+	all, err := reviewNameOnlyPaths(ctx, repoPath, []string{"show", "--format=", "--name-only", sha})
+	if err != nil {
+		return ReviewFileScope{}, fmt.Errorf("git show review files: %w", err)
+	}
+	args := []string{"show", "--format=", "--name-only", sha, "--"}
+	args = append(args, ReviewPathspecArgs(extraExcludes...)...)
+	included, err := reviewNameOnlyPaths(ctx, repoPath, args)
+	if err != nil {
+		return ReviewFileScope{}, fmt.Errorf("git show filtered review files: %w", err)
+	}
+	return ReviewFileScopeFrom(all, included), nil
+}
+
+// RangeReviewFileScopeCtx is CommitReviewFileScopeCtx for a range, mirroring
+// GetRangeDiffCtx's git diff.
+func RangeReviewFileScopeCtx(
+	ctx context.Context, repoPath, rangeRef string, extraExcludes ...string,
+) (ReviewFileScope, error) {
+	all, err := reviewNameOnlyPaths(ctx, repoPath, []string{"diff", "--name-only", rangeRef})
+	if err != nil {
+		return ReviewFileScope{}, fmt.Errorf("git diff range review files: %w", err)
+	}
+	args := []string{"diff", "--name-only", rangeRef, "--"}
+	args = append(args, ReviewPathspecArgs(extraExcludes...)...)
+	included, err := reviewNameOnlyPaths(ctx, repoPath, args)
+	if err != nil {
+		return ReviewFileScope{}, fmt.Errorf("git diff filtered range review files: %w", err)
+	}
+	return ReviewFileScopeFrom(all, included), nil
+}
+
+func reviewNameOnlyPaths(ctx context.Context, repoPath string, args []string) ([]string, error) {
+	cmd := newGitCmdContext(ctx, args...)
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var paths []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		if unquoted, err := strconv.Unquote(line); err == nil {
+			line = unquoted
+		}
+		paths = append(paths, line)
+	}
+	return paths, nil
+}
+
+// DirtyReviewFileScope pairs the file list captured at enqueue with the paths named
+// by the captured diff's headers.
+func DirtyReviewFileScope(diff string, changedFiles []string) ReviewFileScope {
+	included := DiffPaths(diff)
+	if len(changedFiles) == 0 {
+		return ReviewFileScope{Included: len(included), IncludedKnown: true}
+	}
+	return ReviewFileScopeFrom(changedFiles, included)
+}
+
+// DiffPaths returns every path named by a "diff --git" header in diff.
+func DiffPaths(diff string) []string {
+	seen := make(map[string]struct{})
+	for line := range strings.SplitSeq(diff, "\n") {
+		if !strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		left, rest, ok := parseDiffHeaderPath(strings.TrimPrefix(line, "diff --git "))
+		if !ok {
+			continue
+		}
+		right, _, ok := parseDiffHeaderPath(rest)
+		if !ok {
+			continue
+		}
+		seen[strings.TrimPrefix(left, "a/")] = struct{}{}
+		seen[strings.TrimPrefix(right, "b/")] = struct{}{}
+	}
+
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	return paths
+}
+
+func parseDiffHeaderPath(input string) (string, string, bool) {
+	input = strings.TrimLeft(input, " ")
+	if input == "" {
+		return "", "", false
+	}
+	if input[0] != '"' {
+		path, rest, found := strings.Cut(input, " ")
+		return path, rest, found || path != ""
+	}
+	for i := 1; i < len(input); i++ {
+		if input[i] == '\\' {
+			i++
+			continue
+		}
+		if input[i] != '"' {
+			continue
+		}
+		path, err := strconv.Unquote(input[:i+1])
+		if err != nil {
+			return "", "", false
+		}
+		return path, input[i+1:], true
+	}
+	return "", "", false
+}
+
 // GetDiffLimited returns up to maxBytes of a commit diff and reports whether the
 // output was truncated before the full diff was read.
 func GetDiffLimited(

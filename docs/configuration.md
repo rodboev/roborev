@@ -736,6 +736,9 @@ Patterns can be filenames, directory names (with trailing `/`), or glob patterns
 (including `**`). Both global and repo-level patterns are merged. User patterns
 are appended to the built-in exclusion list.
 
+Review prompts report how many files the review covers and how many the exclude
+patterns removed.
+
 !!! note
 
     Security reviews (`--type security`) skip repo-level exclude patterns entirely.
