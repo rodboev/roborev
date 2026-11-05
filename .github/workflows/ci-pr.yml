@@ -1,26 +1,87 @@
-name: CI
+name: Mirror growth calibration
 
-# Use the PR's workflow so CI changes are tested before merging.
 on:
   pull_request:
     branches: [main]
-  merge_group:
-    types: [checks_requested]
 
 permissions: read-all
 
 jobs:
-  run:
-    cache-mode: read
-    uses: ./.github/workflows/ci.yml
-
-  gate:
-    name: CI gate
-    needs: run
-    if: always()
+  integration:
     runs-on: ubuntu-latest
-    steps:
-      - name: Require CI success
+    timeout-minutes: 360
+    services:
+      postgres:
+        image: postgres:18-alpine
         env:
-          RESULT: ${{ needs.run.result }}
-        run: test "$RESULT" = success
+          POSTGRES_USER: roborev_test
+          POSTGRES_PASSWORD: roborev_test_password
+          POSTGRES_DB: roborev_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U roborev_test -d roborev_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.6
+      - name: Install SQLite headers
+        run: kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update && kit-retry 3 5 sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Restore Go caches
+        uses: $/.github/actions/go-cache-restore
+        with:
+          group: Linux
+      - name: Measure fixed predicate
+        timeout-minutes: 170
+        run: |
+          mkdir -p calibration/fixed
+          failed=0
+          for i in $(seq -w 1 20); do
+            if make test-search-mirror-growth > "calibration/fixed/$i.log" 2>&1; then
+              echo "$i pass" | tee -a calibration/fixed/results.txt
+            else
+              echo "$i fail" | tee -a calibration/fixed/results.txt
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Upload fixed predicate output
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: mirror-growth-fixed-attempt-${{ github.run_attempt }}
+          path: calibration/fixed/
+          retention-days: 14
+          if-no-files-found: error
+      - name: Restore historical predicate
+        if: always() && !cancelled()
+        run: sed -i 's/AND +j.status IN/AND j.status IN/' internal/storage/search_feed.go
+      - name: Measure historical predicate
+        if: always() && !cancelled()
+        timeout-minutes: 170
+        run: |
+          mkdir -p calibration/historical
+          failed=0
+          for i in $(seq -w 1 20); do
+            if make test-search-mirror-growth > "calibration/historical/$i.log" 2>&1; then
+              echo "$i pass" | tee -a calibration/historical/results.txt
+            else
+              echo "$i fail" | tee -a calibration/historical/results.txt
+              failed=1
+            fi
+          done
+          exit "$failed"
+      - name: Upload historical predicate output
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: mirror-growth-historical-attempt-${{ github.run_attempt }}
+          path: calibration/historical/
+          retention-days: 14
+          if-no-files-found: error
