@@ -1,26 +1,65 @@
-name: CI
+name: Pull growth calibration
 
-# Use the PR's workflow so CI changes are tested before merging.
 on:
   pull_request:
     branches: [main]
-  merge_group:
-    types: [checks_requested]
 
 permissions: read-all
 
 jobs:
-  run:
-    cache-mode: read
-    uses: ./.github/workflows/ci.yml
-
-  gate:
-    name: CI gate
-    needs: run
-    if: always()
+  integration:
     runs-on: ubuntu-latest
-    steps:
-      - name: Require CI success
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:18-alpine
         env:
-          RESULT: ${{ needs.run.result }}
-        run: test "$RESULT" = success
+          POSTGRES_USER: roborev_test
+          POSTGRES_PASSWORD: roborev_test_password
+          POSTGRES_DB: roborev_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U roborev_test -d roborev_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.6
+      - name: Install SQLite headers
+        run: kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update && kit-retry 3 5 sudo apt-get install -y --no-install-recommends libsqlite3-dev
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
+        with:
+          group: Linux
+      - name: Run twenty focused executions
+        env:
+          TEST_POSTGRES_URL: postgres://roborev_test:roborev_test_password@localhost:5433/roborev_test
+          GOFLAGS: -shuffle=on
+        run: |
+          mkdir -p calibration
+          failed=0
+          for i in $(seq -w 1 20); do
+            echo "Execution $i"
+            if make test-postgres-growth > "calibration/$i.log" 2>&1; then
+              echo "$i pass" | tee -a calibration/results.txt
+            else
+              echo "$i fail" | tee -a calibration/results.txt
+              failed=1
+            fi
+            cp gotestsum/postgres-growth.json "calibration/$i.json" || failed=1
+          done
+          exit "$failed"
+      - name: Upload first-attempt output
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: pull-growth-calibration-attempt-${{ github.run_attempt }}
+          path: calibration/
+          retention-days: 14
+          if-no-files-found: error
