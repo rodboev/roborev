@@ -64,6 +64,7 @@ roborev init          # Install post-commit hook
 git commit -m "..."   # Reviews happen automatically
 roborev tui           # View reviews in interactive UI
 roborev ui            # Open reviews in the native browser UI
+roborev nonexistent-command
 ```
 
 If roborev is managed by a version manager, `roborev init` and
